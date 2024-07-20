@@ -114,7 +114,7 @@ static inline void put_many_str(char *s, size_t count) {
 static inline const char *format_time(time_t time) {
   static char buf[FORMAT_TIME_BUF_CAP] = {};
   struct tm *local = localtime(&time);
-  snprintf(buf, FORMAT_TIME_BUF_CAP, "%u:%u", local->tm_hour % 12, local->tm_min);
+  snprintf(buf, FORMAT_TIME_BUF_CAP, "%02u:%02u", local->tm_hour % 12, local->tm_min);
   return buf;
 }
 
