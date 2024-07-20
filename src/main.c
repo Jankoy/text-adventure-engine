@@ -53,7 +53,7 @@ void get_term_size(int *cols, int *rows) {
           "setupterm() failed: terminal is hardcopy\n"
         );
         goto done;
-    } // switch
+    }
   }
 
   *cols = tigetnum((char*)"cols");
@@ -110,7 +110,7 @@ static inline void put_many_str(char *s, size_t count) {
     printf(s);
 }
 
-#define FORMAT_TIME_BUF_CAP 64
+#define FORMAT_TIME_BUF_CAP 8
 static inline const char *format_time(time_t time) {
   static char buf[FORMAT_TIME_BUF_CAP] = {};
   struct tm *local = localtime(&time);
@@ -144,9 +144,20 @@ int main(void) {
     if (strcmp(input_buf, "exit\n") == 0 || !input_buf[0])
       break;
     else if (input_buf[0] == '\n')
-      continue;
+      goto end;
+
+    if ((int)message_log.count < rows - 3)
+      nob_da_append(&message_log, ((message_t){time(NULL), strdup(input_buf)}));
+    else {
+      for (size_t i = 0; i < message_log.count; ++i)
+        message_log.items[i] = message_log.items[i + 1];
+      message_log.items[message_log.count - 1] = ((message_t){time(NULL), strdup(input_buf)});
+    }
     
-    nob_da_append(&message_log, ((message_t){time(NULL), strdup(input_buf)}));
+    if (strcmp(input_buf, "clear\n") == 0)
+      message_log.count = 0;
+
+end:
     memset(input_buf, '\0', INPUT_BUF_CAP);
   }
 
