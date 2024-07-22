@@ -132,6 +132,12 @@ static inline void log_message(const char *message) {
   }
 }
 
+static inline void log_clear(void) {
+  for (size_t i = 0; i < message_log.count; ++i)
+    free((char *)message_log.items[i].msg);
+  message_log.count = 0;
+}
+
 #define MAX_MAP_SIZE 5
 typedef struct {
   char map[MAX_MAP_SIZE][MAX_MAP_SIZE];
@@ -254,7 +260,7 @@ int main(void) {
     else if (input_buf[0] == '\n')
       goto end;
     else if (strcmp(input_buf, "clear\n") == 0)
-      message_log.count = 0;
+      log_clear();
     else if (strcmp(input_buf, "read\n") == 0)
       read_adventure_file("test.ta", &adventure);
     else {
