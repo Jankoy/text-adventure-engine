@@ -1,0 +1,12 @@
+map
+ A
+DSB
+ C
+pam
+rooms
+S="You are in an empty room, there are exits to the north, east, south, and west of you."
+A="This is a dead end, there is an exit to the south of you."
+B="This is a dead end, there is an exit to the west of you."
+C="This is a dead end, there is an exit to the north of you."
+D="This is a dead end, there is an exit to the east of you."
+smoor

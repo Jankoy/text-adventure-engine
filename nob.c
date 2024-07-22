@@ -36,6 +36,7 @@ static bool build_main(Nob_Cmd *cmd, build_platform_t platform, bool release, co
 
   nob_cmd_append(cmd, compiler, "-o", exe);
   nob_cmd_append(cmd, "src/main.c");
+  nob_cmd_append(cmd, "-Wall", "-Wextra");
   if (release)
     nob_cmd_append(cmd, "-O2", "-s");
   else
