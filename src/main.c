@@ -77,8 +77,28 @@ done:
 
 #define MOVE_CURSOR(column, line) ESC"[%d;%dH", (line), (column)
 
+// Undefine curses.h color definitions
+#undef COLOR_BLACK
+#undef COLOR_RED
+#undef COLOR_GREEN
+#undef COLOR_YELLOW
+#undef COLOR_BLUE
+#undef COLOR_MAGENTA
+#undef COLOR_CYAN
+#undef COLOR_WHITE
+
+#define COLOR_RESET   ESC"[0m"
+
+#define COLOR_BLACK   ESC"[30m"
+#define COLOR_RED     ESC"[31m"
+#define COLOR_GREEN   ESC"[32m"
+#define COLOR_YELLOW  ESC"[33m"
+#define COLOR_BLUE    ESC"[34m"
+#define COLOR_MAGENTA ESC"[35m"
+#define COLOR_CYAN    ESC"[36m"
+#define COLOR_WHITE   ESC"[37m"
+
 #define COLOR_GRAY  ESC"[2;37m"
-#define COLOR_RESET ESC"[0m"
 
 void sig_handler(int _) {
     (void)_;
@@ -150,7 +170,7 @@ static bool read_adventure_file(const char *filename, adventure_t *dest) {
   Nob_String_Builder source = {};
 
   if (!nob_read_entire_file(filename, &source)) {
-    log_message("Error: Could not read adventure file!");
+    log_message(COLOR_RED"Error: Could not read adventure file!");
     nob_return_defer(false);
   }
 
@@ -162,7 +182,7 @@ static bool read_adventure_file(const char *filename, adventure_t *dest) {
 
   Nob_String_View line = nob_sv_chop_by_delim(&view, '\n');
   if (!nob_sv_eq(line, nob_sv_from_cstr("map"))) {
-    log_message("Error: Invalid or corrupt adventure file!");
+    log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
     nob_return_defer(false);
   }
   line = nob_sv_chop_by_delim(&view, '\n');
@@ -189,12 +209,12 @@ end:
       goto end;
   }
   if (!pam) {
-    log_message("Error: Invalid or corrupt adventure file!");
+    log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
     nob_return_defer(false);
   }
 
   if (!nob_sv_eq(line, nob_sv_from_cstr("rooms"))) {
-    log_message("Error: Invalid or corrupt adventure file!");
+    log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
     nob_return_defer(false);
   }
   line = nob_sv_chop_by_delim(&view, '\n');
@@ -208,11 +228,11 @@ end:
     }
     char key = line.data[0];
     if (line.data[1] != '=') {
-      log_message("Error: Invalid or corrupt adventure file!");
+      log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
       nob_return_defer(false);
     }
     if (line.data[2] != '"') {
-      log_message("Error: Invalid or corrupt adventure file!");
+      log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
       nob_return_defer(false);
     }
     nob_sv_chop_by_delim(&line, '"');
@@ -221,9 +241,11 @@ end:
     line = nob_sv_chop_by_delim(&view, '\n');
   }
   if (!smoor) {
-    log_message("Error: Invalid or corrupt adventure file!");
+    log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
     nob_return_defer(false);
   }
+
+  log_message(nob_temp_sprintf(COLOR_YELLOW"Adventure \"%s\" loaded successfully!", filename));
 
 defer:  
   nob_sb_free(source);
@@ -237,11 +259,15 @@ int main(void) {
   signal(SIGQUIT, sig_handler);
   signal(SIGINT, sig_handler);
 
+  bool adventure_loaded = false;
+
   while (true) {
     get_term_size(&cols, &rows);
 
     printf(RESET_CURSOR);
     printf(CLEAR_SCREEN);
+
+    size_t temp_save = nob_temp_save();
 
     put_many_char('=', cols);
     putchar('\n');
@@ -255,21 +281,30 @@ int main(void) {
     putchar('\n');
     fgets(input_buf, INPUT_BUF_CAP, stdin);
 
-    if (strcmp(input_buf, "exit\n") == 0 || !input_buf[0])
-      break;
-    else if (input_buf[0] == '\n')
+    if (input_buf[0] == '\n')
       goto end;
-    else if (strcmp(input_buf, "clear\n") == 0)
+    
+    input_buf[strlen(input_buf) - 1] = '\0';
+    log_message(input_buf);
+    
+    if (strcmp(input_buf, "exit") == 0 || !input_buf[0])
+      break;
+    else if (strcmp(input_buf, "clear") == 0)
       log_clear();
-    else if (strcmp(input_buf, "read\n") == 0)
-      read_adventure_file("test.ta", &adventure);
-    else {
-      input_buf[strlen(input_buf) - 1] = '\0';
-      log_message(input_buf);
-    }
-
+    else if (strcmp(input_buf, "load") == 0) {
+      adventure_loaded = read_adventure_file("test.ta", &adventure);
+      log_message(nob_temp_sprintf(COLOR_YELLOW"%s", adventure.rooms['S']));
+    } else if (strcmp(input_buf, "look") == 0) {
+      if (!adventure_loaded)
+        log_message(COLOR_RED"Error: No adventure loaded, please use the \"load\" command first!");
+      else
+        log_message(nob_temp_sprintf(COLOR_YELLOW"%s", adventure.rooms['S']));
+    } else
+      log_message(COLOR_RED"Error: Unknown command!");
+    
 end:
     memset(input_buf, '\0', INPUT_BUF_CAP);
+    nob_temp_rewind(temp_save);
   }
 
   printf(RESET_CURSOR);
