@@ -1,13 +1,9 @@
 #define NOB_IMPLEMENTATION
 #include "src/nob.h"
 
-#define LINUX_COMPILER "cc"
-#define WINDOWS_COMPILER "x86_64-w64-mingw32-cc"
-
 typedef enum { PLATFORM_LINUX, PLATFORM_WINDOWS } build_platform_t;
 
 static bool build_main(Nob_Cmd *cmd, build_platform_t platform, bool release, const char **exe_out) {
-  const char *compiler = (platform == PLATFORM_LINUX) ? LINUX_COMPILER : WINDOWS_COMPILER;
   const char *platform_string = (platform == PLATFORM_LINUX) ? "linux" : "windows";
   const char *release_string = (release) ? "release" : "debug";
 
@@ -34,14 +30,22 @@ static bool build_main(Nob_Cmd *cmd, build_platform_t platform, bool release, co
 
   cmd->count = 0;
 
-  nob_cmd_append(cmd, compiler, "-o", exe);
+  nob_cmd_append(cmd, "cc", "-o", exe);
   nob_cmd_append(cmd, "src/main.c");
   nob_cmd_append(cmd, "-Wall", "-Wextra");
+
   if (release)
     nob_cmd_append(cmd, "-O2", "-s");
   else
     nob_cmd_append(cmd, "-Og", "-ggdb");
-  nob_cmd_append(cmd, "-lcurses");
+
+  if (platform == PLATFORM_WINDOWS) {
+  	nob_cmd_append(cmd, "-Iexternal/pdcurses/include");
+ 	nob_cmd_append(cmd, "-Lexternal/pdcurses/lib");
+  	nob_cmd_append(cmd, "-lpdcurses");
+  } else {
+  	nob_cmd_append(cmd, "-lcurses");
+  }
 
   nob_cmd_run_sync(*cmd);
 

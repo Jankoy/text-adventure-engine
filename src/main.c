@@ -1,11 +1,18 @@
-#include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <sys/types.h>
+#undef MOUSE_MOVED
+#else
+#include <signal.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#endif //_WIN32
+#include <signal.h>
 #include <curses.h>
 #include <time.h>
 #include <term.h>
@@ -13,6 +20,19 @@
 #define NOB_IMPLEMENTATION
 #include "nob.h"
 
+// As it stands, the linux version of this function works more reliably.
+// Both versions however are very hacky.
+#ifdef _WIN32
+void get_term_size(int *cols, int *rows) {
+	CONSOLE_SCREEN_BUFFER_INFO csbi;
+	if (!GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+	    fprintf(stderr, "GetConsoleScreenBufferInfo() failed\n");
+        return;
+	}
+	*cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+	*rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+}
+#else
 void get_term_size(int *cols, int *rows) {
   char const *const term = getenv("TERM");
   if (term == NULL) {
@@ -69,6 +89,7 @@ done:
   if (tty_fd != -1)
     close(tty_fd);
 }
+#endif //_WIN32
 
 #define ESC "\033"
 
@@ -256,7 +277,9 @@ defer:
 static adventure_t adventure = {};
 
 int main(void) {
+#ifdef SIGQUIT
   signal(SIGQUIT, sig_handler);
+#endif
   signal(SIGINT, sig_handler);
 
   bool adventure_loaded = false;
