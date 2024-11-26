@@ -2,8 +2,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+
 #ifdef _WIN32
 #include <windows.h>
+#undef ERROR
 #include <sys/types.h>
 #undef MOUSE_MOVED
 #else
@@ -11,17 +13,27 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
-#endif //_WIN32
-#include <signal.h>
 #include <curses.h>
-#include <time.h>
+// Undefine curses.h color definitions
+#undef COLOR_BLACK
+#undef COLOR_RED
+#undef COLOR_GREEN
+#undef COLOR_YELLOW
+#undef COLOR_BLUE
+#undef COLOR_MAGENTA
+#undef COLOR_CYAN
+#undef COLOR_WHITE
 #include <term.h>
+#endif //_WIN32
+
+#include <signal.h>
+#include <time.h>
 
 #define NOB_IMPLEMENTATION
+#define NOB_STRIP_PREFIX
 #include "nob.h"
 
-// As it stands, the linux version of this function works more reliably.
-// Both versions however are very hacky.
+// As it stands, these functions are written very hackily.
 #ifdef _WIN32
 void get_term_size(int *cols, int *rows) {
 	CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -98,16 +110,6 @@ done:
 
 #define MOVE_CURSOR(column, line) ESC"[%d;%dH", (line), (column)
 
-// Undefine curses.h color definitions
-#undef COLOR_BLACK
-#undef COLOR_RED
-#undef COLOR_GREEN
-#undef COLOR_YELLOW
-#undef COLOR_BLUE
-#undef COLOR_MAGENTA
-#undef COLOR_CYAN
-#undef COLOR_WHITE
-
 #define COLOR_RESET   ESC"[0m"
 
 #define COLOR_BLACK   ESC"[30m"
@@ -164,13 +166,18 @@ static inline const char *format_time(time_t time) {
 
 static inline void log_message(const char *message) {
   if ((int)message_log.count < rows - 3)
-    nob_da_append(&message_log, ((message_t){time(NULL), strdup(message)}));
+    da_append(&message_log, ((message_t){time(NULL), strdup(message)}));
   else {
-    free((char *)message_log.items[0].msg);
-    for (size_t i = 0; i < message_log.count; ++i)
+      free((char *)message_log.items[0].msg);
+    for (size_t i = 0; i < message_log.count - 1; ++i)
       message_log.items[i] = message_log.items[i + 1];
     message_log.items[message_log.count - 1] = ((message_t){time(NULL), strdup(message)});
   }
+}
+
+static inline void log_help(void) {
+  log_message(COLOR_YELLOW"Type \"load <adventure name>\" to load an <adventure name>.ta file.");
+  log_message(COLOR_YELLOW"Then type \"look\" to look around the room, or \"look <direction>\" to look into a nearby room.");
 }
 
 static inline void log_clear(void) {
@@ -179,98 +186,160 @@ static inline void log_clear(void) {
   message_log.count = 0;
 }
 
+typedef enum {
+  NORTH,
+  EAST,
+  SOUTH,
+  WEST,
+  INVALID_DIRECTION
+} direction_t;
+
+typedef struct {
+  const char *description;
+  char connections[4];
+} room_t;
+
 #define MAX_MAP_SIZE 5
 typedef struct {
   char map[MAX_MAP_SIZE][MAX_MAP_SIZE];
-  const char *rooms[256];
+  room_t rooms[256];
 } adventure_t;
 
+#define SV(cstr) sv_from_cstr((cstr))
+#ifdef _WIN32
+String_View sv_chop_by_newline(String_View *sv) {
+  String_View part = sv_chop_by_delim((sv), '\n');
+  return sv_chop_by_delim(&part, '\r');
+}
+#else
+String_View sv_chop_by_newline(String_View *sv) {
+  return sv_chop_by_delim(sv, '\n');
+}
+#endif //_WIN32
+typedef int (chop_predicate_t)(int);
+String_View sv_chop_by_predicate(String_View *sv, chop_predicate_t predicate) {
+    size_t i = 0;
+    while (i < sv->count && !predicate(sv->data[i])) {
+        i += 1;
+    }
+
+    Nob_String_View result = nob_sv_from_parts(sv->data, i);
+
+    if (i < sv->count) {
+        sv->count -= i + 1;
+        sv->data  += i + 1;
+    } else {
+        sv->count -= i;
+        sv->data  += i;
+    }
+
+    return result;
+}
+
+direction_t get_direction_index(String_View dir) {
+  if (sv_eq(dir, SV("north"))) return NORTH;
+  if (sv_eq(dir, SV("east"))) return EAST;
+  if (sv_eq(dir, SV("south"))) return SOUTH;
+  if (sv_eq(dir, SV("west"))) return WEST;
+  return INVALID_DIRECTION;
+}
+
+#define error_read(filename) \
+  do { \
+    log_message(temp_sprintf(COLOR_RED"Error %d: could not read adventure file: %s", __LINE__, (filename))); \
+    return_defer(false); \
+  } while (0);
+
+#define error_invalid(filename) \
+  do { \
+  log_message(temp_sprintf(COLOR_RED"Error %d: invalid or corrupt adventure file: %s", __LINE__, (filename))); \
+  return_defer(false); \
+  } while (0);
+
 static bool read_adventure_file(const char *filename, adventure_t *dest) {
-  size_t temp_save = nob_temp_save();
+  size_t save = temp_save();
   bool result = true;
-  Nob_String_Builder source = {};
+  String_Builder source = {};
 
-  if (!nob_read_entire_file(filename, &source)) {
-    log_message(COLOR_RED"Error: Could not read adventure file!");
-    nob_return_defer(false);
-  }
+  if (!read_entire_file(filename, &source)) error_read(filename);
 
-  Nob_String_View view = {
+  String_View view = {
     .data = source.items,
     .count = source.count
   };
-  view = nob_sv_trim(view);
+  view = sv_trim(view);
 
-  Nob_String_View line = nob_sv_chop_by_delim(&view, '\n');
-  if (!nob_sv_eq(line, nob_sv_from_cstr("map"))) {
-    log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
-    nob_return_defer(false);
-  }
-  line = nob_sv_chop_by_delim(&view, '\n');
+  String_View line = sv_chop_by_newline(&view);
+  if (!sv_eq(line, SV("map"))) error_invalid(filename);
+  line = sv_chop_by_newline(&view);
 
   bool pam = false;
   int row = 0;
   while (line.count > 0) {
-    if (nob_sv_eq(line, nob_sv_from_cstr("pam"))) {
+    if (sv_eq(line, SV("pam"))) {
       pam = true;
 end:
-      line = nob_sv_chop_by_delim(&view, '\n');
+      line = sv_chop_by_newline(&view);
       break;
     }
     
     for (size_t i = 0; i < line.count && i <= MAX_MAP_SIZE; ++i) {
-      if (line.data[i] != ' ' && line.data[i] != '\n')
+      if (line.data[i] != ' ' && !(line.data[i] == '\n' || line.data[i] == '\r'))
         dest->map[row][i] = line.data[i];
     }
     
-    line = nob_sv_chop_by_delim(&view, '\n');
+    line = sv_chop_by_newline(&view);
     row++;
 
-    if (row > MAX_MAP_SIZE)
-      goto end;
+    if (row > MAX_MAP_SIZE) goto end;
   }
-  if (!pam) {
-    log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
-    nob_return_defer(false);
-  }
+  if (!pam) error_invalid(filename);
 
-  if (!nob_sv_eq(line, nob_sv_from_cstr("rooms"))) {
-    log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
-    nob_return_defer(false);
-  }
-  line = nob_sv_chop_by_delim(&view, '\n');
+  if (!sv_eq(line, SV("rooms"))) error_invalid(filename);
+  line = sv_chop_by_newline(&view);
 
   bool smoor = false;
   while (line.count > 0) {
-    if (nob_sv_eq(line, nob_sv_from_cstr("smoor"))) {
+    if (line.data[0] == '#') goto skip;
+    if (sv_eq(line, SV("smoor"))) {
       smoor = true;
-      line = nob_sv_chop_by_delim(&view, '\n');
+      line = sv_chop_by_newline(&view);
       break;
     }
+    if (!sv_end_with(line, ";")) error_invalid(filename);
+    room_t room = {0};
     char key = line.data[0];
-    if (line.data[1] != '=') {
-      log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
-      nob_return_defer(false);
+    if (line.data[1] != '=') error_invalid(filename);
+    if (line.data[2] != '"') error_invalid(filename);
+    sv_chop_by_delim(&line, '"');
+    String_View value = sv_chop_by_delim(&line, '"');
+    room.description = strdup(temp_sv_to_cstr(value));
+    if (line.data[0] == '(') {
+      line.count--;
+      line.data++;
+      if (line.data[0] == ';') error_invalid(filename);
+      while (line.data[0] != ';' && line.count > 1) {
+        direction_t dir = get_direction_index(sv_chop_by_delim(&line, '='));
+        if (dir == INVALID_DIRECTION) error_invalid(filename);
+        char r = line.data[0];
+        line.count--;
+        line.data++;
+        if (!(line.data[0] == ',' || line.data[0] == ')')) error_invalid(filename);
+        room.connections[dir] = r;
+        line.count--;
+        line.data++;
+      }
     }
-    if (line.data[2] != '"') {
-      log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
-      nob_return_defer(false);
-    }
-    nob_sv_chop_by_delim(&line, '"');
-    Nob_String_View value = nob_sv_chop_by_delim(&line, '"');
-    dest->rooms[(size_t)key] = strdup(nob_temp_sv_to_cstr(value));
-    line = nob_sv_chop_by_delim(&view, '\n');
+    if (line.data[0] != ';') error_invalid(filename);
+    dest->rooms[(size_t)key] = room;
+skip:
+    line = sv_chop_by_newline(&view);
   }
-  if (!smoor) {
-    log_message(COLOR_RED"Error: Invalid or corrupt adventure file!");
-    nob_return_defer(false);
-  }
-
-  log_message(nob_temp_sprintf(COLOR_YELLOW"Adventure \"%s\" loaded successfully!", filename));
+  if (!smoor) error_invalid(filename);
 
 defer:  
-  nob_sb_free(source);
-  nob_temp_rewind(temp_save);
+  sb_free(source);
+  temp_rewind(save);
   return result;
 }
 
@@ -283,6 +352,7 @@ int main(void) {
   signal(SIGINT, sig_handler);
 
   bool adventure_loaded = false;
+  char current_room = 'S';
 
   while (true) {
     get_term_size(&cols, &rows);
@@ -290,7 +360,7 @@ int main(void) {
     printf(RESET_CURSOR);
     printf(CLEAR_SCREEN);
 
-    size_t temp_save = nob_temp_save();
+    size_t save = temp_save();
 
     put_many_char('=', cols);
     putchar('\n');
@@ -309,25 +379,49 @@ int main(void) {
     
     input_buf[strlen(input_buf) - 1] = '\0';
     log_message(input_buf);
+    String_View input = SV(input_buf);
+    for (size_t i = 0; i < input.count; ++i)
+      input_buf[i] = tolower(input_buf[i]);
+    String_View cmd = sv_chop_by_predicate(&input, isspace);
     
-    if (strcmp(input_buf, "exit") == 0 || !input_buf[0])
+    if (sv_eq(cmd, SV("exit")) || !input_buf[0])
       break;
-    else if (strcmp(input_buf, "clear") == 0)
+    if (sv_eq(cmd, SV("help"))) {
+      log_help();
+    } else if (sv_eq(cmd, SV("clear")))
       log_clear();
-    else if (strcmp(input_buf, "load") == 0) {
-      adventure_loaded = read_adventure_file("test.ta", &adventure);
-      log_message(nob_temp_sprintf(COLOR_YELLOW"%s", adventure.rooms['S']));
-    } else if (strcmp(input_buf, "look") == 0) {
+    else if (sv_eq(cmd, SV("load"))) {
+      if (sv_eq(input, SV(""))) {
+        log_message(COLOR_RED"Error: no adventure name provided, please provide a name");
+      } else {
+        const char *filename = temp_sprintf(SV_Fmt".ta", SV_Arg(input));
+        if ((adventure_loaded = read_adventure_file(filename, &adventure))) {
+          log_message(temp_sprintf(COLOR_YELLOW"Info: adventure \"%s\" loaded successfully", filename));
+          log_message(temp_sprintf(COLOR_YELLOW"%s", adventure.rooms[(unsigned char)current_room].description));
+        }
+      }
+    } else if (sv_eq(cmd, SV("look"))) {
       if (!adventure_loaded)
-        log_message(COLOR_RED"Error: No adventure loaded, please use the \"load\" command first!");
-      else
-        log_message(nob_temp_sprintf(COLOR_YELLOW"%s", adventure.rooms['S']));
+        log_message(COLOR_RED"Error: no adventure loaded, please use the \"load\" command first");
+      else {
+        String_View direction = sv_chop_by_predicate(&input, isspace);
+        if (sv_eq(direction, SV("")))
+          log_message(temp_sprintf(COLOR_YELLOW"%s", adventure.rooms[(unsigned char)current_room].description));
+        else {
+          direction_t idx = get_direction_index(direction);
+          if (idx == INVALID_DIRECTION)
+            log_message(temp_sprintf(COLOR_RED"Error: \""SV_Fmt"\" is an invalid direction (north, south, east, west)", SV_Arg(direction)));
+          else {
+          log_message(temp_sprintf(COLOR_YELLOW"%s", adventure.rooms[(unsigned char)adventure.rooms[(unsigned char)current_room].connections[idx]].description));
+          }
+        }
+      }
     } else
-      log_message(COLOR_RED"Error: Unknown command!");
+      log_message(COLOR_RED"Error: unknown command");
     
 end:
     memset(input_buf, '\0', INPUT_BUF_CAP);
-    nob_temp_rewind(temp_save);
+    temp_rewind(save);
   }
 
   printf(RESET_CURSOR);

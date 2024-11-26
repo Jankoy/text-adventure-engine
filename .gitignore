@@ -1,3 +1,6 @@
 nob
 nob.old
+nob.exe
+nob.exe.old
 build/*
+.vscode/*
